@@ -1,0 +1,75 @@
+#!/usr/bin/python
+import os
+import subprocess
+import sys
+
+def read_pairs(filename):
+    # open data files from where this module is
+    top = os.path.dirname(__file__)
+    path = os.path.join(top, filename)
+    with file(path) as f:
+        for line in f:
+            assert line.endswith('\n'), \
+                "Partial final line in {path}".format(path=path)
+            line = line.rstrip('\n')
+            pair = line.split(None, 1)
+            if len(pair) == 1:
+                # crappy input
+                continue
+            yield pair
+
+class NotFound(Exception):
+    pass
+
+def find_pairs(filename, want, key_column=0):
+    for columns in read_pairs(filename):
+        got = columns.pop(key_column)
+        if got == want:
+            (value,) = columns
+            return value
+    raise NotFound(
+        'file {filename} has no entry for key {key} in column {idx}'.format(
+            filename=filename,
+            key=want,
+            idx=key_column,
+            ),
+        )
+
+def find_pduaddr(pdu):
+    for pdu2, pduaddr in read_pairs('machine_console'):
+        if pdu2 == pdu:
+            return pduaddr
+
+def get_pdu_info(log):
+    info = dict(log=log)
+    info['phys'] = find_pairs('machine_masq', info['log'], key_column=1)
+    info['power'] = find_pairs('machine_power', info['phys'])
+    (info['pdu'], info['port']) = info['power'].rsplit('-', 1)
+    info['pduaddr'] = find_pairs('machine_console', info['pdu'])
+    return info
+
+def run_helper(*args):
+    top = os.path.dirname(__file__)
+    path = os.path.join(top, '_pdu_helper.pl')
+    with file('/dev/null') as devnull:
+        subprocess.check_call(
+            args=[path]+list(args),
+            stdin=devnull,
+            )
+
+def main():
+    log = sys.argv[1]
+    try:
+        info = get_pdu_info(log)
+    except NotFound as e:
+        print >>sys.stderr, "powercycle: host not found: {msg}".format(msg=e)
+        return 1
+    print 'powercycle: log={log} phys={phys} power={power} pduaddr={pduaddr}'.format(**info)
+    try:
+        run_helper(info['pduaddr'], info['port'])
+    except subprocess.CalledProcessError as e:
+        print >>sys.stderr, "powercycle: helper failed: {msg}".format(msg=e)
+        return 1
+
+if __name__ == '__main__':
+    sys.exit(main())
